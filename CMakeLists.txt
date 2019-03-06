@@ -1,7 +1,7 @@
 # To compile this project on Windows, you'll need to have:
 #   nVidia GPU
 #   CUDA Toolkit
-#   Microsoft Visual C++ Build Tools with Windows SDK matching you Windows version (if you have Visual Studio installed you have that one already)
+#   Microsoft Visual C++ Build Tools 2015
 #
 # You'll also need to adjust the variables here and in Compile.bat because most probably you'll have different paths than mine.
 #
@@ -63,4 +63,3 @@ else ()
     endforeach ()
 
 endif ()
-

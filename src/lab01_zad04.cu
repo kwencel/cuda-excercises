@@ -33,13 +33,13 @@ __global__ void inverseArray(T* devRes) {
 }
 
 int main() {
-    printf("Kernal will be invoked with: Block(%d,%d), Grid(%d,%d)\n", dimBlock.x, dimBlock.y, dimGrid.x, dimGrid.y);
+    printf("Kernel will be invoked with: Block(%d,%d), Grid(%d,%d)\n", dimBlock.x, dimBlock.y, dimGrid.x, dimGrid.y);
     std::array<float, WORK_TOTAL> src = {1, 2, 3, 4, 5, 6, 7, 8, 9};
     std::array<float, WORK_TOTAL> res;
     CudaBuffer<float> devRes(WORK_TOTAL);
 
     devRes.copyFrom(src);
-    inverseArray <<<dimGrid, dimBlock>>> (devRes);
+    inverseArray<float> <<<dimGrid, dimBlock>>> (devRes);
     devRes.copyTo(res);
 
     // Wait for the kernel to complete and check for errors

@@ -26,6 +26,7 @@ __global__ void addRowNo(float* devSrc, float* devRes) {
 }
 
 int main() {
+    printf("Kernel will be invoked with: Block(%d,%d), Grid(%d,%d)\n", dimBlock.x, dimBlock.y, dimGrid.x, dimGrid.y);
     std::array<float, WORK_TOTAL> src {0};
     std::array<float, WORK_TOTAL> res;
 

@@ -15,8 +15,13 @@ inline cudaError_t cudaAssert(cudaError_t result, const char *file, int line, bo
 template <typename T>
 class CudaBuffer {
 public:
-    CudaBuffer(std::size_t length) : length(length) {
+    explicit CudaBuffer(std::size_t length) : length(length) {
         checkCuda(cudaMalloc((void**) &buffer, getSize()));
+    }
+
+    template <typename Container>
+    CudaBuffer(Container& container) : CudaBuffer(container.size()) {
+        copyFrom(container);
     }
 
     ~CudaBuffer() {

@@ -15,6 +15,7 @@ set(CMAKE_CXX_STANDARD 14)
 set(CUDA_TOOLKIT_ROOT_DIR "D:/Programy/nVidia/CUDA/v10.0")
 set(CUDA_SAMPLES_ROOT_DIR "D:/Programy/nVidia/CUDA/v10.0/Samples")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/build")
+set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} --expt-extended-lambda")
 set(CUSTOM_NVCC_BUILD true)
 
 include_directories("${CUDA_TOOLKIT_ROOT_DIR}/include")
@@ -28,8 +29,8 @@ if (OPENMP_FOUND)
     set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 endif()
 
+file(GLOB files "${CMAKE_SOURCE_DIR}/src/*.cu")
 if (WIN32 AND CUSTOM_NVCC_BUILD)
-    file(GLOB files "${CMAKE_SOURCE_DIR}/src/*.cu")
     foreach (file ${files})
         # Get only the filename without the absolute path
         get_filename_component(file ${file} NAME_WE)
@@ -38,11 +39,12 @@ if (WIN32 AND CUSTOM_NVCC_BUILD)
                 OUTPUT "${CMAKE_SOURCE_DIR}/build/${file}.exe"
                 COMMAND cmd /C "${CMAKE_SOURCE_DIR}/Compile.bat ${file}.cu"
                 DEPENDS "${CMAKE_SOURCE_DIR}/src/${file}.cu"
+                DEPENDS "${CMAKE_SOURCE_DIR}/src/CudaUtils.h"
 #                DEPENDS "${CMAKE_SOURCE_DIR}/src/constants/*.h"
         )
         # Because this target depends on the .exe and CMake knows the upper command is responsible
         # for generating this .exe - it will be invoked before running the target. However the command
-        # itself is configured to recompile the .exe only if the sorce file was modified. Clever, huh?
+        # itself is configured to recompile the .exe only if the source file was modified. Clever, huh?
         message("Generating new target: ${file}")
         add_custom_target(
                 ${file} ALL
@@ -51,7 +53,6 @@ if (WIN32 AND CUSTOM_NVCC_BUILD)
     endforeach ()
 
 else ()
-    file(GLOB files "${CMAKE_SOURCE_DIR}/src/*.cu")
     foreach (file ${files})
         # Get only the filename without the absolute path
         get_filename_component(file ${file} NAME_WE)
@@ -61,5 +62,9 @@ else ()
                 src/${file}.cu
         )
     endforeach ()
-
 endif ()
+
+# Dummy executable needed for CLion to provide syntax assistance
+file (GLOB SOURCES src/**.cpp src/**.cu src/**.h)
+set_source_files_properties(${SOURCES} PROPERTIES LANGUAGE CXX)
+add_executable(dummy ${SOURCES})

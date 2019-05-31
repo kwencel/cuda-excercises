@@ -8,9 +8,15 @@
 #include <cassert>
 #include <set>
 #include <algorithm>
+#include <string>
+#include <thrust/device_vector.h>
+#include <thrust/copy.h>
+#include <thrust/count.h>
 
 #include "device_launch_parameters.h"
 #include "CudaUtils.h"
+
+#define PATTERN_LENGTH 4
 
 #define WORK_WIDTH 6 // TODO liczba wariacji
 #define WORK_HEIGHT 1
@@ -18,11 +24,36 @@
 #define BLOCK_HEIGHT 1
 #define WORK_TOTAL WORK_WIDTH * WORK_HEIGHT
 #define RESULTS_TOTAL 10
+using Type = int;
+
+template <typename T, std::size_t SIZE>
+struct VariationOutput {
+    bool found;
+    T variation[SIZE];
+};
+
+template <typename Container>
+std::string printContainer(Container const& container) {
+    if (container.empty()) {
+        return "{}";
+    }
+    std::string result = "{" + std::to_string(*(container.begin()));
+    if (container.size() == 1) {
+        return result + "}";
+    }
+    for (auto it = std::next(container.begin()); it != container.end(); ++it) {
+        result += "," + std::to_string(*it);
+    }
+    result += '}';
+    return result;
+}
 
 
 template <typename Integral, typename std::enable_if_t<std::is_integral<Integral>::value>* = nullptr>
 __host__ __device__ Integral factorial(Integral const n) {
+//    if constexpr (!std::is_unsigned<Integral>::value) {
     assert(n >= 0);
+//    }
     if (n == 0) {
         return 1;
     }
@@ -35,7 +66,9 @@ __host__ __device__ Integral factorial(Integral const n) {
 
 template <typename Integral, typename std::enable_if_t<std::is_integral<Integral>::value>* = nullptr>
 __host__ __device__ Integral variationsCount(Integral const n, Integral const k) {
-    assert(n >= 0 && k >= 0);
+//    if constexpr (!std::is_unsigned<Integral>::value) {
+        assert(n >= 0 && k >= 0);
+//    }
     return factorial(n) / factorial(n - k);
 }
 
@@ -60,21 +93,21 @@ __host__ __device__ void computeVariation(T const* const input, Integral const n
         }
 
         output[x] = input[t];
-
         removed[t] = true;
-
         p = p % v;
     }
+
+    delete[] removed;
 }
 
-template <typename T>
-__host__ __device__ void substituteSequence(GpuData<T> const& pattern, GpuData<T> const& distinctPattern,
-                                            T const * const variation, T* const output) {
+template <typename T, typename S>
+__host__ __device__ void substitutePattern(GpuData<T, S> const& pattern, GpuData<T, S> const& distinctPattern,
+                                           T const * const variation, T* const output) {
 
-    for (decltype(pattern.length) patternIndex = 0; patternIndex < pattern.length; ++patternIndex) {
+    for (S patternIndex = 0; patternIndex < pattern.length; ++patternIndex) {
         T currentPatternSymbol = pattern.data[patternIndex];
         // Find the substitution
-        for (decltype(pattern.length) distinctPatternIndex = 0; distinctPatternIndex < distinctPattern.length; ++distinctPatternIndex) {
+        for (S distinctPatternIndex = 0; distinctPatternIndex < distinctPattern.length; ++distinctPatternIndex) {
             T currentDistinctPatternSymbol = distinctPattern.data[distinctPatternIndex];
             if (currentDistinctPatternSymbol == currentPatternSymbol) {
                 output[patternIndex] = variation[distinctPatternIndex];
@@ -91,63 +124,69 @@ void distinctValues(std::vector<T>& data) {
     data.resize(std::distance(data.begin(), iter));
 }
 
-template <typename T>
-__host__ __device__ void checkPattern(GpuData<T> const& sequence, GpuData<T> const& pattern) {
-//    __shared__ char sharedSeq[SEQUENCE_SIZE];
-//    int tid = threadIdx.x;
-//    int gtid = blockIdx.x * blockDim.x + threadIdx.x;
-//    if (gtid < SEQUENCE_SIZE) {
-//        sharedSeq[tid] = sequence[gtid];
-//    }
-
+template <typename T, typename S>
+__host__ __device__ bool checkPattern(GpuData<T, S> const& sequence, GpuData<T, S> const& pattern) {
     int gtid = blockIdx.x * blockDim.x + threadIdx.x;
 
     T const* sequencePtr = sequence.data;
     T const* patternPtr = pattern.data;
     while (sequencePtr - sequence.data < sequence.length) {
         if (*patternPtr == *sequencePtr) {
-            if (++patternPtr - pattern.data == pattern.length) {
+            ++patternPtr;
+            if (patternPtr - pattern.data == pattern.length) {
                 printf("[GTID %d] Matches!\n", gtid);
-                return;
+                return true;
             }
         }
         ++sequencePtr;
     }
     printf("[GTID %d] Not matches!\n", gtid);
+    return false;
 }
 
-template <typename T>
-__global__ void compute(GpuData<T> const sequence, GpuData<T> const distinctSequence, GpuData<T> const pattern,
-                        GpuData<T> const distinctPattern) {
+template <typename T, typename S>
+__global__ void compute(GpuData<T, S> const sequence, GpuData<T, S> const distinctSequence, GpuData<T, S> const pattern,
+                        GpuData<T, S> const distinctPattern, T* outputVariations, bool* outputFound) {
 
     int const gtid = blockIdx.x * blockDim.x + threadIdx.x;
 
-    T* variation = new T[variationsCount(distinctSequence.length, distinctPattern.length)]; // TODO calculate beforehand
+    T* variation = new T[distinctPattern.length];
+    // Compute the variation to be checked by this thread
     computeVariation(distinctSequence.data, distinctSequence.length, distinctPattern.length, gtid, variation);
-    T* finalPattern = new T[pattern.length];
-    substituteSequence(pattern, distinctPattern, variation, finalPattern);
-    checkPattern(sequence, GpuData<T> { finalPattern, pattern.length }); // Return something
-
+    T* finalPattern = outputVariations + (gtid * pattern.length);
+    // Assign computed values to the pattern
+    substitutePattern(pattern, distinctPattern, variation, finalPattern);
+    outputFound[gtid] = checkPattern(sequence, GpuData<T, S> { finalPattern, pattern.length });
+    // If found a match, copy the substituted pattern to the output array
+    if (outputFound[gtid]) {
+        for (S i = 0; i < pattern.length; ++i) {
+            outputVariations[gtid + i] = finalPattern[i];
+        }
+    }
+    delete[] variation;
 }
 
 int main() {
 
-//    std::vector<int> sequence = { 0,3,9,8,5,7,3,0,9,4,8,5,0,9,4,8,7,3,2,4,0,9,5,8,3,2,7,5,0,9,2,3,8,7,5,9,3,2,8,5,7,3,7,5,6,3,9,8,5,6,9,8 };
-    std::vector<int> pattern = { 0,1,1,0 };
-    CudaBuffer<int> devPattern(pattern);
+    std::vector<Type> pattern = { 0,1,1,0 };
+    CudaBuffer<Type, Type> devPattern(pattern);
 
-    std::vector<int> sequence = { 1,2,4,3,5,3,6,2,1 };
-    CudaBuffer<int> devSequence(sequence);
+    std::vector<Type> sequence = { 1,2,4,3,5,3,6,2,1 };
+    CudaBuffer<Type, Type> devSequence(sequence);
 
-    std::vector<int> distinctPattern(pattern);
+    std::vector<Type> distinctPattern(pattern);
     distinctValues(distinctPattern);
-    CudaBuffer<int> devDistinctPattern(distinctPattern);
+    CudaBuffer<Type, Type> devDistinctPattern(distinctPattern);
 
-    std::vector<int> distinctSequence(sequence);
+    std::vector<Type> distinctSequence(sequence);
     distinctValues(distinctSequence);
-    CudaBuffer<int> devDistinctSequence(distinctSequence);
+    CudaBuffer<Type, Type> devDistinctSequence(distinctSequence);
 
-    int workAmount = variationsCount(distinctSequence.size(), distinctPattern.size());
+    Type workAmount = variationsCount(distinctSequence.size(), distinctPattern.size());
+    CudaBuffer<Type, Type> devOutputVariations(workAmount * sizeof(Type));
+//    CudaBuffer<bool, Type> devOutputFound(workAmount);
+    thrust::device_vector<bool> devOutputFound(workAmount);
+
     dim3 dimBlock(workAmount, 1);
     dim3 dimGrid(
             static_cast<int>(ceilf(workAmount / static_cast<float>(dimBlock.x))),
@@ -156,19 +195,26 @@ int main() {
 
     printf("Invoking with: Block(%d,%d), Grid(%d,%d)\n", dimBlock.x, dimBlock.y, dimGrid.x, dimGrid.y);
     runWithProfiler([&]{
-        compute<<<dimGrid, dimBlock>>>(devSequence.getStruct(), devDistinctSequence.getStruct(),
-                                       devPattern.getStruct(), devDistinctPattern.getStruct());
+        compute<Type, Type><<<dimGrid, dimBlock>>>(devSequence, devDistinctSequence, devPattern, devDistinctPattern,
+                                                   devOutputVariations, devOutputFound.data().get());
     });
-    checkCuda(cudaPeekAtLastError());
-    checkCuda(cudaDeviceSynchronize());
+    std::cout << "przed liczeniem" << std::endl;
 
-//    char a[] = { 'a','b','c' };
-//    char out[6];
-//
-//    computeVariation(a, 3, 2, 0, out);
-//    std::cout << out[0] << out[1] << std::endl;
+//    int variationsAmount = thrust::count(devOutputFound.getPointer(), devOutputFound.getPointer() + devOutputFound.getLength() , true);
+    auto variationsAmount = thrust::count(devOutputFound.begin(), devOutputFound.end(), true);
+    thrust::device_vector<Type> result(variationsAmount);
 
+    auto first = thrust::make_zip_iterator(thrust::make_tuple(devOutputVariations.getPointer(), thrust::counting_iterator<Type>(0)));
+    auto last = thrust::make_zip_iterator(thrust::make_tuple(devOutputVariations.getPointer(), thrust::counting_iterator<Type>(workAmount)));
+//    thrust::copy_if(devOutputVariations.getPointer(), devOutputVariations.getPointer() + devOutputVariations.getLength(),
+//                    __device__ [] (auto v))
 
+    std::vector<Type> outputVariations(devOutputVariations.getLength());
+//    std::vector<bool> outputFound(devOutputFound.getLength());
 
-    return 0;
+    devOutputVariations.copyTo(outputVariations);
+//    devOutputFound.copyTo(outputFound);
+
+    std::cout << printContainer(outputVariations) << std::endl;
+
 }

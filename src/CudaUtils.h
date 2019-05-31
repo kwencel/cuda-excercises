@@ -59,23 +59,49 @@ void runWithProfiler(const std::function<void ()>& code) {
     printf("Kernel execution finished in %.3f ms\n", elapsedTime);
 }
 
-template <typename T>
+template <typename T, typename S = std::size_t>
 struct GpuData {
     T const * const data;
-    T length; // Usually it should be std::size_t however due to task description I could limit it to T
+    S const length; // Usually it should be std::size_t however due to task description I could limit it to T
 
-    std::size_t getSize() const {
+    S getLength() const {
+        return length;
+    }
+
+    auto getSize() const {
         return length * sizeof(T);
     }
 };
 
-template <typename T>
-struct MutableGpuData {
-    T* const data;
-    T length; // Usually it should be std::size_t however due to task description I could limit it to T
-};
+//// C++17 only
+//template <typename T, auto SIZE>
+//struct GpuDataT {
+//    T const * const data;
+//
+//    auto getLength() const {
+//        return SIZE;
+//    }
+//
+//    auto getSize() const {
+//        return SIZE * sizeof(T);
+//    }
+//};
 
-template <typename T>
+//// C++17 only
+//template <typename T, auto SIZE>
+//struct GpuDataArray {
+//    T data[SIZE];
+//
+//    auto getLength() const {
+//        return SIZE;
+//    }
+//
+//    auto getSize() const {
+//        return SIZE * sizeof(T);
+//    }
+//};
+
+template <typename T, typename S = std::size_t>
 class CudaBuffer {
 public:
     explicit CudaBuffer(std::size_t length) : length(length) {
@@ -85,14 +111,12 @@ public:
     // Containers
     template <class Container, typename std::enable_if_t<std::is_same<T, typename std::remove_reference_t<Container>::value_type>::value>* = nullptr>
     explicit CudaBuffer(Container&& container) : CudaBuffer(container.size()) {
-        std::cout << "Container" << std::endl;
         copyFrom(container);
     }
 
     // Non-containers but types that can be copied by simple memcpy()
     template<typename std::enable_if_t<std::is_trivially_copyable<std::remove_reference_t<T>>::value>* = nullptr>
     explicit CudaBuffer(T&& copyable) : CudaBuffer(1) {
-        std::cout << "Copyable" << std::endl;
         copyFrom(&copyable, getSize());
     }
 
@@ -106,25 +130,27 @@ public:
     CudaBuffer& operator = (CudaBuffer&& other) = delete;
 
     operator T*() const {
+        return getPointer();
+    }
+
+    operator GpuData<T, S>() const {
+        return GpuData<T, S> { getPointer(), getLength() };
+    }
+
+    T* getPointer() const {
         return buffer;
     }
 
-    GpuData<T> getStruct() const {
-        return GpuData<T> { buffer, static_cast<T>(getLength()) };
-    }
-
-    std::size_t getLength() const {
+    S getLength() const {
         return length;
     }
 
-    std::size_t getSize() const {
+    auto getSize() const {
         return getLength() * sizeof(T);
     }
 
     void copyTo(void* target, std::size_t size) {
-        if (size > getSize()) {
-            throw std::runtime_error("Tried to copy to host more than the buffer length");
-        }
+        assert(("Tried to copy to host more than the buffer length", size <= getSize()));
         checkCuda(cudaMemcpy(target, buffer, size, cudaMemcpyDeviceToHost));
     }
 
@@ -134,9 +160,7 @@ public:
     }
 
     void copyFrom(const void* source, std::size_t size) {
-        if (size > getSize()) {
-            throw std::runtime_error("Tried to copy to device more than the buffer length");
-        }
+        assert(("Tried to copy to device more than the buffer length", size <= getSize()));
         checkCuda(cudaMemcpy(buffer, source, size, cudaMemcpyHostToDevice));
     }
 
@@ -147,5 +171,5 @@ public:
 
 private:
     T* buffer;
-    std::size_t length;
+    S length;
 };

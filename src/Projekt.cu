@@ -16,8 +16,6 @@
 #include "device_launch_parameters.h"
 #include "CudaUtils.h"
 
-#define PATTERN_LENGTH 4
-
 #define WORK_WIDTH 6 // TODO liczba wariacji
 #define WORK_HEIGHT 1
 #define BLOCK_WIDTH 1
@@ -25,12 +23,6 @@
 #define WORK_TOTAL WORK_WIDTH * WORK_HEIGHT
 #define RESULTS_TOTAL 10
 using Type = int;
-
-template <typename T, std::size_t SIZE>
-struct VariationOutput {
-    bool found;
-    T variation[SIZE];
-};
 
 template <typename Container>
 std::string printContainer(Container const& container) {
@@ -146,9 +138,12 @@ __host__ __device__ bool checkPattern(GpuData<T, S> const& sequence, GpuData<T, 
 
 template <typename T, typename S>
 __global__ void compute(GpuData<T, S> const sequence, GpuData<T, S> const distinctSequence, GpuData<T, S> const pattern,
-                        GpuData<T, S> const distinctPattern, T* outputVariations, bool* outputFound) {
+                        GpuData<T, S> const distinctPattern, T* outputVariations, bool* outputFound, S workAmount) {
 
     int const gtid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (gtid >= workAmount) {
+        return;
+    }
 
     T* variation = new T[distinctPattern.length];
     // Compute the variation to be checked by this thread
@@ -160,11 +155,25 @@ __global__ void compute(GpuData<T, S> const sequence, GpuData<T, S> const distin
     // If found a match, copy the substituted pattern to the output array
     if (outputFound[gtid]) {
         for (S i = 0; i < pattern.length; ++i) {
-            outputVariations[gtid + i] = finalPattern[i];
+            outputVariations[(gtid * pattern.length) + i] = finalPattern[i];
         }
     }
     delete[] variation;
 }
+
+template <typename S>
+struct FoundMatcher : public thrust::unary_function<S, bool> {
+    FoundMatcher(S const patternSize, bool const * const found) : patternSize(patternSize), found(found) { }
+
+    __device__ __host__  bool operator()(S index) {
+        return found[index / patternSize];
+    }
+
+    S const patternSize;
+    bool const * const found;
+};
+
+using namespace thrust::placeholders;
 
 int main() {
 
@@ -183,8 +192,7 @@ int main() {
     CudaBuffer<Type, Type> devDistinctSequence(distinctSequence);
 
     Type workAmount = variationsCount(distinctSequence.size(), distinctPattern.size());
-    CudaBuffer<Type, Type> devOutputVariations(workAmount * sizeof(Type));
-//    CudaBuffer<bool, Type> devOutputFound(workAmount);
+    thrust::device_vector<Type> devOutputVariations(workAmount * sizeof(Type));
     thrust::device_vector<bool> devOutputFound(workAmount);
 
     dim3 dimBlock(workAmount, 1);
@@ -195,26 +203,20 @@ int main() {
 
     printf("Invoking with: Block(%d,%d), Grid(%d,%d)\n", dimBlock.x, dimBlock.y, dimGrid.x, dimGrid.y);
     runWithProfiler([&]{
-        compute<Type, Type><<<dimGrid, dimBlock>>>(devSequence, devDistinctSequence, devPattern, devDistinctPattern,
-                                                   devOutputVariations, devOutputFound.data().get());
+        compute<Type, Type><<<dimGrid, dimBlock>>>(
+                devSequence, devDistinctSequence, devPattern, devDistinctPattern,
+                devOutputVariations.data().get(), devOutputFound.data().get(), workAmount);
     });
-    std::cout << "przed liczeniem" << std::endl;
 
-//    int variationsAmount = thrust::count(devOutputFound.getPointer(), devOutputFound.getPointer() + devOutputFound.getLength() , true);
     auto variationsAmount = thrust::count(devOutputFound.begin(), devOutputFound.end(), true);
-    thrust::device_vector<Type> result(variationsAmount);
+    thrust::device_vector<Type> devResult(variationsAmount * pattern.size());
+    auto trans = thrust::make_transform_iterator(thrust::counting_iterator<Type>(0), FoundMatcher<Type>(pattern.size(), devOutputFound.data().get()));
+    thrust::copy_if(devOutputVariations.begin(), devOutputVariations.end(), trans, devResult.begin(), _1 == true);
+//    thrust::copy_if(devOutputVariations.begin(), devOutputVariations.end(), thrust::make_permutation_iterator(devOutputFound.begin(), thrust::make_transform_iterator(thrust::counting_iterator<int>(0), _1 / pattern.size() == 1)), devResult.begin(), _1 == 1);
 
-    auto first = thrust::make_zip_iterator(thrust::make_tuple(devOutputVariations.getPointer(), thrust::counting_iterator<Type>(0)));
-    auto last = thrust::make_zip_iterator(thrust::make_tuple(devOutputVariations.getPointer(), thrust::counting_iterator<Type>(workAmount)));
-//    thrust::copy_if(devOutputVariations.getPointer(), devOutputVariations.getPointer() + devOutputVariations.getLength(),
-//                    __device__ [] (auto v))
+    thrust::host_vector<Type> result(devResult);
 
-    std::vector<Type> outputVariations(devOutputVariations.getLength());
-//    std::vector<bool> outputFound(devOutputFound.getLength());
-
-    devOutputVariations.copyTo(outputVariations);
-//    devOutputFound.copyTo(outputFound);
-
-    std::cout << printContainer(outputVariations) << std::endl;
+    std::cout << "PRZED " << printContainer(devOutputVariations) << std::endl;
+    std::cout << "PO " << printContainer(devResult) << std::endl;
 
 }

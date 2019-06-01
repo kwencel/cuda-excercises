@@ -28,6 +28,7 @@
 #include <cuda_runtime.h>
 #include <cuda_profiler_api.h>
 #include <iostream>
+#include <thrust/device_vector.h>
 
 #define checkCuda(ans) { cudaAssert((ans), __FILE__, __LINE__); }
 inline cudaError_t cudaAssert(cudaError_t result, const char* file, int line, bool abort = true) {
@@ -62,13 +63,17 @@ void runWithProfiler(const std::function<void ()>& code) {
 template <typename T, typename S = std::size_t>
 struct GpuData {
     T const * const data;
-    S const length; // Usually it should be std::size_t however due to task description I could limit it to T
+    S const length;
 
-    S getLength() const {
+    __host__ GpuData(thrust::device_vector<T> const& vector) : data(vector.data().get()), length(vector.size()) { }
+
+    __device__ __host__ GpuData(T const * const data, S const length) : data(data), length(length) { }
+
+    __device__ __host__ S getLength() const {
         return length;
     }
 
-    auto getSize() const {
+    __device__ __host__ auto getSize() const {
         return length * sizeof(T);
     }
 };
@@ -137,16 +142,16 @@ public:
         return GpuData<T, S> { getPointer(), getLength() };
     }
 
+    auto getSize() const {
+        return getLength() * sizeof(T);
+    }
+
     T* getPointer() const {
         return buffer;
     }
 
     S getLength() const {
         return length;
-    }
-
-    auto getSize() const {
-        return getLength() * sizeof(T);
     }
 
     void copyTo(void* target, std::size_t size) {

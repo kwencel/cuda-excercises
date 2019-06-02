@@ -34,6 +34,13 @@ std::string printContainer(Container const& container) {
     return result;
 }
 
+template <class DestContainer, class Source>
+DestContainer parseTo(Source const& source) {
+    using Target = typename DestContainer::value_type;
+    std::istringstream is(source);
+    return DestContainer(std::istream_iterator<Target>(is), std::istream_iterator<Target>());
+}
+
 
 template <typename Integral, typename std::enable_if_t<std::is_integral<Integral>::value>* = nullptr>
 __host__ __device__ std::size_t factorial(Integral const n) {
@@ -146,8 +153,8 @@ __host__ __device__ bool checkPattern(GpuData<T, S> const& sequence, GpuData<T, 
 }
 
 template <typename T, typename S>
-__global__ void compute(GpuData<T, S> const sequence, GpuData<T, S> const distinctSequence, GpuData<T, S> const pattern,
-                        GpuData<T, S> const distinctPattern, T* outputVariations, bool* outputFound, S workAmount) {
+__device__ void compute(GpuData<T, S> const& sequence, GpuData<T, S> const& distinctSequence, GpuData<T, S> const& pattern,
+                        GpuData<T, S> const& distinctPattern, T* outputVariations, bool* outputFound, S workAmount) {
 
     int const gtid = blockIdx.x * blockDim.x + threadIdx.x;
     if (gtid >= workAmount) {
@@ -170,6 +177,13 @@ __global__ void compute(GpuData<T, S> const sequence, GpuData<T, S> const distin
     delete[] variation;
 }
 
+template <typename T, typename S>
+__global__ void computeIndirect(GpuData<T, S> const sequence, GpuData<T, S> const distinctSequence, GpuData<T, S> const pattern,
+                        GpuData<T, S> const distinctPattern, T* outputVariations, bool* outputFound, S workAmount) {
+
+    compute<T, S>(sequence, distinctSequence, pattern, distinctPattern, outputVariations, outputFound, workAmount);
+}
+
 template <typename S>
 struct FoundMatcher : public thrust::unary_function<S, bool> {
     FoundMatcher(S const patternSize, bool const * const found) : patternSize(patternSize), found(found) { }
@@ -182,14 +196,53 @@ struct FoundMatcher : public thrust::unary_function<S, bool> {
     bool const * const found;
 };
 
-using namespace thrust::placeholders;
+using Block = dim3;
+using Grid = dim3;
+struct LaunchParameters {
+    int optimalBlockSize;
+    int optimalGridSize;
+    int workloadGridSize;
 
-template <class DestContainer, class Source>
-DestContainer parseTo(Source const& source) {
-    using Target = typename DestContainer::value_type;
-    std::istringstream is(source);
-    return DestContainer(std::istream_iterator<Target>(is), std::istream_iterator<Target>());
+    /** Maximum occupancy - all blocks resident on SMs**/
+    std::pair<Grid, Block> getOptimal() {
+        return { dim3(optimalGridSize), dim3(optimalBlockSize) };
+    }
+
+    /** Real occupancy - minimal launch configuration to handle the workload **/
+    std::pair<Grid, Block> getReal() {
+        return { dim3(workloadGridSize), dim3(optimalBlockSize) };
+    }
+
+    /** Real occupancy bounded by the residency requirement. No non-resident blocks will be launched **/
+    std::pair<Grid, Block> getRealResident() {
+        return { dim3(std::min(optimalGridSize, workloadGridSize)), dim3(optimalBlockSize) };
+    }
+};
+
+template <typename Kernel>
+LaunchParameters calculateOptimalLaunchParameters(Kernel kernel, std::size_t dynamicSMemSize, int blockSizeLimit) {
+    int blockSize;   // The launch configurator returned block size
+    int minGridSize; // The minimum grid size needed to achieve the maximum occupancy for a full device launch
+    int gridSize;    // The actual grid size needed, based on input size
+    int maxActiveBlocks;
+    int device;
+
+    cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, kernel, dynamicSMemSize, blockSizeLimit);
+    gridSize = (blockSizeLimit + blockSize - 1) / blockSize;
+    printf("[CUDA] Optimal block size: %d, grid size: %d\n", blockSize, minGridSize);
+    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxActiveBlocks, kernel, blockSize, dynamicSMemSize);
+    printf("[CUDA] %d\n", maxActiveBlocks);
+    cudaDeviceProp props;
+    cudaGetDevice(&device);
+    cudaGetDeviceProperties(&props, device);
+    float occupancy = (maxActiveBlocks * blockSize / props.warpSize) /(float)(props.maxThreadsPerMultiProcessor / props.warpSize);
+    printf("[CUDA] Theoretical occupancy of one SM: %f\n", occupancy);
+    printf("[CUDA] Throretical occupancy of whole GPU: %f\n", occupancy * ((float) gridSize / minGridSize));
+
+    return LaunchParameters { blockSize, minGridSize, gridSize };
 }
+
+using namespace thrust::placeholders;
 
 int main(int argc, char** argv) {
     if (argc < 4) {
@@ -220,33 +273,15 @@ int main(int argc, char** argv) {
     thrust::device_vector<bool> devOutputFound(workAmount);
 
     /** ---------------------------- Calculate optimal kernel launch parameters ---------------------------- **/
-    int blockSize;   // The launch configurator returned block size
-    int minGridSize; // The minimum grid size needed to achieve the maximum occupancy for a full device launch
-    int gridSize;    // The actual grid size needed, based on input size
-    cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, compute<Type, Type>, 0, workAmount);
-
-    gridSize = (workAmount + blockSize - 1) / blockSize;
-    printf("[CUDA] Optimal block size: %d, grid size: %d\n", blockSize, minGridSize);
-    dim3 dimBlock(blockSize, 1);
-    dim3 dimGrid(gridSize, 1);
-    printf("[CUDA] Invoking with: Block(%d,%d), Grid(%d,%d)\n", dimBlock.x, dimBlock.y, dimGrid.x, dimGrid.y);
-
-    // Calculate theoretical occupancy
-    int maxActiveBlocks;
-    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxActiveBlocks, compute<Type, Type>, blockSize, 0);
-    std::cout << maxActiveBlocks << std::endl;
-    int device;
-    cudaDeviceProp props;
-    cudaGetDevice(&device);
-    cudaGetDeviceProperties(&props, device);
-    float occupancy = (maxActiveBlocks * blockSize / props.warpSize) /(float)(props.maxThreadsPerMultiProcessor / props.warpSize);
-    printf("[CUDA] Theoretical occupancy of one SM: %f\n", occupancy);
-    printf("[CUDA] Throretical occupancy of whole GPU: %f\n", occupancy * ((float) gridSize / minGridSize));
 
     if (mode == "all") {
+        auto launchParameters = calculateOptimalLaunchParameters(computeIndirect<Type, Type>, 0, workAmount).getReal();
+        dim3 dimGrid = launchParameters.first;
+        dim3 dimBlock = launchParameters.second;
         /** ---------------------------------------- Launch the kernel ---------------------------------------- **/
+        printf("[CUDA] Invoking with: Block(%d,%d), Grid(%d,%d)\n", dimBlock.x, dimBlock.y, dimGrid.x, dimGrid.y);
         runWithProfiler([&] {
-            compute<Type, Type> <<<gridSize, blockSize>>> (
+            computeIndirect<Type, Type> <<<dimGrid, dimBlock>>> (
                     devSequence, devDistinctSequence, devPattern, devDistinctPattern,
                     devOutputVariations.data().get(), devOutputFound.data().get(), workAmount
             );

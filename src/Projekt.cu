@@ -16,10 +16,12 @@
 #include <thrust/unique.h>
 #include <thrust/execution_policy.h>
 #include <sstream>
+#include <cooperative_groups.h>
 
 #include "device_launch_parameters.h"
 #include "CudaUtils.h"
 using Type = int;
+using namespace thrust::placeholders;
 
 template <typename Container>
 std::string printContainer(Container const& container) {
@@ -42,6 +44,22 @@ DestContainer parseTo(Source const& source) {
     using Target = typename DestContainer::value_type;
     std::istringstream is(source);
     return DestContainer(std::istream_iterator<Target>(is), std::istream_iterator<Target>());
+}
+
+template <typename T>
+void removeDuplicates(std::vector<T>& data) {
+    std::sort(data.begin(), data.end());
+    auto iter = std::unique(data.begin(), data.end());
+    data.resize(std::distance(data.begin(), iter));
+}
+
+template <typename T>
+thrust::device_vector<T> removeDuplicates(thrust::device_vector<T> const& input) {
+    thrust::device_vector<T> result(input);
+    thrust::sort(thrust::device, result.begin(), result.end());
+    auto iter = thrust::unique(thrust::device, result.begin(), result.end());
+    result.resize(std::distance(result.begin(), iter));
+    return result;
 }
 
 template <typename S>
@@ -95,10 +113,17 @@ LaunchParameters calculateOptimalLaunchParameters(Kernel kernel, std::size_t dyn
     cudaGetDevice(&device);
     cudaGetDeviceProperties(&props, device);
     float occupancy = (maxActiveBlocks * blockSize / props.warpSize) /(float)(props.maxThreadsPerMultiProcessor / props.warpSize);
-    printf("[CUDA] Theoretical occupancy of one SM: %f\n", occupancy);
-    printf("[CUDA] Throretical occupancy of whole GPU: %f\n", occupancy * ((float) gridSize / minGridSize));
+    printf("[CUDA] Theoretical occupancy assuming launching with optimal grid %d: %f\n", minGridSize, occupancy);
+    printf("[CUDA] Theoretical occupancy assuming launching with neccessary grid %d to handle all the work: %f\n", gridSize, occupancy * ((float) gridSize / minGridSize));
 
     return LaunchParameters { blockSize, minGridSize, gridSize };
+}
+
+__device__ void logLaunchParameters(char const* const kernelName) {
+    int gtid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (gtid == 0) {
+        printf("[CUDA] Invoking %s with: Block(%d,%d), Grid(%d,%d)\n", kernelName, blockDim.x, blockDim.y, gridDim.x, gridDim.y);
+    }
 }
 
 template <typename Integral, typename std::enable_if_t<std::is_integral<Integral>::value>* = nullptr>
@@ -131,7 +156,14 @@ __host__ __device__ std::size_t variationsCount(Integral const n, Integral const
     }
     #endif
     assert(n >= k);
-    return factorial(n) / factorial(n - k);
+    if (k == 0) {
+        return 1;
+    }
+    std::size_t result = n - k + 1;
+    for (std::size_t i = result + 1; i <= n; ++i) {
+        result *= i;
+    }
+    return result;
 }
 
 template <typename T, typename Integral, typename std::enable_if_t<std::is_integral<Integral>::value>* = nullptr>
@@ -184,40 +216,27 @@ __host__ __device__ void substitutePattern(GpuData<T, S> const& pattern, GpuData
     }
 }
 
-template <typename T>
-void distinctValues(std::vector<T>& data) {
-    std::sort(data.begin(), data.end());
-    auto iter = std::unique(data.begin(), data.end());
-    data.resize(std::distance(data.begin(), iter));
-}
-
 template <typename T, typename S>
 __host__ __device__ bool checkPattern(GpuData<T, S> const& sequence, GpuData<T, S> const& pattern) {
-    int gtid = blockIdx.x * blockDim.x + threadIdx.x;
-
     T const* sequencePtr = sequence.data;
     T const* patternPtr = pattern.data;
     while (sequencePtr - sequence.data < sequence.length) {
         if (*patternPtr == *sequencePtr) {
             ++patternPtr;
             if (patternPtr - pattern.data == pattern.length) {
-                printf("[GTID %d] Matches! %d %d %d %d %d %d %d\n", gtid, pattern.data[0], pattern.data[1], pattern.data[2], pattern.data[3], pattern.data[4], pattern.data[5], pattern.data[6]);
+//                printf("[WorkNo %d] Matches! %d %d %d %d %d %d %d\n", workNo, pattern.data[0], pattern.data[1], pattern.data[2], pattern.data[3], pattern.data[4], pattern.data[5], pattern.data[6]);
                 return true;
             }
         }
         ++sequencePtr;
     }
-//    printf("[GTID %d] Not matches!\n", gtid);
+//    printf("[WorkNo %d] Not matches!\n", gtid);
     return false;
 }
 
 template <typename T, typename S>
-__device__ void compute(GpuData<T, S> const& sequence, GpuData<T, S> const& distinctSequence, GpuData<T, S> const& pattern,
-                        GpuData<T, S> const& distinctPattern, T* const outputVariations, bool* const outputFound, S workAmount, S workNo) {
-
-    if (workNo >= workAmount) {
-        return;
-    }
+__device__ bool compute(GpuData<T, S> const& sequence, GpuData<T, S> const& distinctSequence, GpuData<T, S> const& pattern,
+                        GpuData<T, S> const& distinctPattern, S workNo, T* const outputVariations, bool* const outputFound) {
 
     T* variation = new T[distinctPattern.length];
     // Compute the variation to be checked by this thread
@@ -225,45 +244,61 @@ __device__ void compute(GpuData<T, S> const& sequence, GpuData<T, S> const& dist
     T* finalPattern = outputVariations + (workNo * pattern.length);
     // Assign computed values to the pattern
     substitutePattern(pattern, distinctPattern, variation, finalPattern);
-    outputFound[workNo] = checkPattern(sequence, GpuData<T, S> { finalPattern, pattern.length });
     delete[] variation;
+    bool found = checkPattern(sequence, GpuData<T, S> { finalPattern, pattern.length });
+    outputFound[workNo] = found;
+    return found;
+}
+
+
+template <typename T, typename S>
+__global__ void computeAll(GpuData<T, S> const sequence, GpuData<T, S> const distinctSequence,
+                           GpuData<T, S> const pattern, GpuData<T, S> const distinctPattern, S const workAmount,
+                           T* const outputVariations, bool* const outputFound) {
+
+    logLaunchParameters("computeAll");
+    int workNo = blockIdx.x * blockDim.x + threadIdx.x;
+    while (workNo < workAmount) {
+        compute<T, S>(sequence, distinctSequence, pattern, distinctPattern, workNo, outputVariations, outputFound);
+        workNo += (blockDim.x * gridDim.x);
+    }
 }
 
 template <typename T, typename S>
-__global__ void computeAll(GpuData<T, S> const sequence, GpuData<T, S> const distinctSequence, GpuData<T, S> const pattern,
-                           GpuData<T, S> const distinctPattern, T* const outputVariations, bool* const outputFound, S workAmount) {
+__global__ void computeAnyWrapper(GpuData<T, S> const sequence, GpuData<T, S> const distinctSequence, GpuData<T, S> const pattern,
+                                  GpuData<T, S> const distinctPattern, S const workAmount, S const iteration,
+                                  T* const outputVariations, bool* const outputFound, volatile bool* const anyFound) {
 
-    int const gtid = blockIdx.x * blockDim.x + threadIdx.x;
-    compute<T, S>(sequence, distinctSequence, pattern, distinctPattern, outputVariations, outputFound, workAmount, gtid);
+    logLaunchParameters("computeAnyWrapper");
+    int const workNo = (blockIdx.x * blockDim.x + threadIdx.x) + (iteration * blockDim.x * gridDim.x);
+    if (workNo < workAmount) {
+        bool found = compute<T, S>(sequence, distinctSequence, pattern, distinctPattern, workNo,
+                                   outputVariations, outputFound);
+        if (found) {
+            *anyFound = true;
+        }
+    }
 }
 
 template <typename T, typename S>
 __global__ void computeAny(GpuData<T, S> const sequence, GpuData<T, S> const distinctSequence, GpuData<T, S> const pattern,
-                           GpuData<T, S> const distinctPattern, T* const outputVariations, bool* const outputFound, S workAmount) {
+                           GpuData<T, S> const distinctPattern, S const workAmount, int const gridSize, int const blockSize,
+                           T* const outputVariations, bool* const outputFound, volatile bool* const anyFound) {
 
-    int const gtid = blockIdx.x * blockDim.x + threadIdx.x;
-    int workNo = gtid;
-    while (workNo < workAmount) {
-        compute<T, S>(sequence, distinctSequence, pattern, distinctPattern, outputVariations, outputFound, workAmount, workNo);
-        __syncthreads(); // Is it needed?
-        int anyFound = __syncthreads_or(outputFound[workNo]);
-        if (!anyFound) {
-            printf("[KERNEL] GTID %d, workNo %d performs the kernel once again\n", gtid, workNo);
-            workNo += (blockDim.x * gridDim.x);
+    logLaunchParameters("computeAny");
+    assert(blockDim.x == 1 && gridDim.x == 1);
+    S iterationNo = 0;
+    do {
+        computeAnyWrapper<T, S><<<gridSize, blockSize>>>(sequence, distinctSequence, pattern, distinctPattern, workAmount,
+                                                         iterationNo, outputVariations, outputFound, anyFound);
+        cudaDeviceSynchronize();
+        printf("[KERNEL] Checked range [%d, %d]\n", (iterationNo) * blockSize * gridSize, (iterationNo + 1) * blockSize * gridSize - 1);
+        if (*anyFound) {
+            printf("[KERNEL] Found matching pattern!\n");
+            return;
         }
-        printf("[KERNEL] GTID %d, workNo %d stops the computation\n", gtid, workNo);
-    }
-}
-
-using namespace thrust::placeholders;
-
-template <typename T>
-thrust::device_vector<T> removeDuplicates(thrust::device_vector<T> const& input) {
-    thrust::device_vector<T> result(input);
-    thrust::sort(thrust::device, result.begin(), result.end());
-    auto iter = thrust::unique(thrust::device, result.begin(), result.end());
-    result.resize(std::distance(result.begin(), iter));
-    return result;
+        ++iterationNo;
+    } while (iterationNo * blockSize * gridSize < workAmount);
 }
 
 int main(int argc, char** argv) {
@@ -286,37 +321,49 @@ int main(int argc, char** argv) {
     thrust::device_vector<Type> devOutputVariations(workAmount * devPattern.size());
     thrust::device_vector<bool> devOutputFound(workAmount);
 
-    /** ---------------------------- Calculate optimal kernel launch parameters ---------------------------- **/
     if (mode == "all") {
         auto launchParameters = calculateOptimalLaunchParameters(computeAll<Type, Type>, 0, workAmount).getReal();
         dim3 dimGrid = launchParameters.first;
         dim3 dimBlock = launchParameters.second;
         /** ---------------------------------------- Launch the kernel ---------------------------------------- **/
-        printf("[CUDA] Invoking with: Block(%d,%d), Grid(%d,%d)\n", dimBlock.x, dimBlock.y, dimGrid.x, dimGrid.y);
         runWithProfiler([&] {
             computeAll<Type, Type> <<<dimGrid, dimBlock>>> (
-                    devSequence, devDistinctSequence, devPattern, devDistinctPattern,
-                    devOutputVariations.data().get(), devOutputFound.data().get(), workAmount
+                    devSequence, devDistinctSequence, devPattern, devDistinctPattern, workAmount,
+                    devOutputVariations.data().get(), devOutputFound.data().get()
             );
         });
-
-        /** ----------------------------------------- Process results ----------------------------------------- **/
-        auto variationsCorrect = thrust::count(devOutputFound.begin(), devOutputFound.end(), true);
-        thrust::device_vector<Type> devResult(variationsCorrect * devPattern.size());
-        auto predicateSource = thrust::make_transform_iterator(thrust::counting_iterator<Type>(0),
-                                                               FoundMatcher<Type>(devPattern.size(), devOutputFound.data().get()));
-        thrust::copy_if(devOutputVariations.begin(), devOutputVariations.end(), predicateSource, devResult.begin(), _1 == true);
-
-        thrust::host_vector<Type> result(devResult);
-        std::cout << "Found " << variationsCorrect << " patterns" << std::endl;
-        for (std::size_t resultIdx = 0; resultIdx < result.size(); resultIdx += devPattern.size()) {
-            for (std::size_t i = 0; i < devPattern.size(); ++i) {
-                std::cout << result[resultIdx + i] << " ";
-            }
-            std::cout << std::endl;
-        }
-    } else if (mode == "any") {
-
+    }
+    else if (mode == "any") {
+        auto launchParameters = calculateOptimalLaunchParameters(computeAll<Type, Type>, 0, workAmount).getRealResident();
+        dim3 dimGrid = launchParameters.first;
+        dim3 dimBlock = launchParameters.second;
+        CudaBuffer<bool> anyFound(false);
+        /** ---------------------------------------- Launch the kernel ---------------------------------------- **/
+        runWithProfiler([&] {
+            computeAny<Type, Type> <<<1, 1>>> (
+                    devSequence, devDistinctSequence, devPattern, devDistinctPattern, workAmount, dimGrid.x, dimBlock.x,
+                    devOutputVariations.data().get(), devOutputFound.data().get(), anyFound
+            );
+        });
+        std::cout << "Was any pattern found: " << (anyFound.getValue() ? "YES" : "NO") << std::endl;
+    }
+    else {
+        throw std::runtime_error("Wrong argument - allowed [all/any]");
     }
 
+    /** ------------------------------------------- Process results ------------------------------------------- **/
+    auto variationsCorrect = thrust::count(devOutputFound.begin(), devOutputFound.end(), true);
+    thrust::device_vector<Type> devResult(variationsCorrect * devPattern.size());
+    auto predicateSource = thrust::make_transform_iterator(thrust::counting_iterator<Type>(0),
+                                                           FoundMatcher<Type>(devPattern.size(), devOutputFound.data().get()));
+    thrust::copy_if(devOutputVariations.begin(), devOutputVariations.end(), predicateSource, devResult.begin(), _1 == true);
+
+    thrust::host_vector<Type> result(devResult);
+    std::cout << "Found " << variationsCorrect << " patterns" << std::endl;
+    for (std::size_t resultIdx = 0; resultIdx < result.size(); resultIdx += devPattern.size()) {
+        for (std::size_t i = 0; i < devPattern.size(); ++i) {
+            std::cout << result[resultIdx + i] << " ";
+        }
+        std::cout << std::endl;
+    }
 }

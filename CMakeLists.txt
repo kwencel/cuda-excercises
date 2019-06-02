@@ -15,7 +15,7 @@ set(CMAKE_CXX_STANDARD 14)
 set(CUDA_TOOLKIT_ROOT_DIR "D:/Programy/nVidia/CUDA/v10.0")
 set(CUDA_SAMPLES_ROOT_DIR "D:/Programy/nVidia/CUDA/v10.0/Samples")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/build")
-set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} --expt-extended-lambda")
+set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} --expt-extended-lambda -rdc=true -lcudadevrt")
 set(CUSTOM_NVCC_BUILD true)
 
 include_directories("${CUDA_TOOLKIT_ROOT_DIR}/include")

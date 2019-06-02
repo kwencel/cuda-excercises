@@ -126,6 +126,13 @@ public:
         return length;
     }
 
+    template<typename std::enable_if_t<std::is_trivially_copyable<std::remove_reference_t<T>>::value>* = nullptr>
+    T getValue() {
+        T temp;
+        copyTo(&temp, sizeof(T));
+        return temp;
+    }
+
     void copyTo(void* target, std::size_t size) {
         assert(("Tried to copy to host more than the buffer length", size <= getSize()));
         checkCuda(cudaMemcpy(target, buffer, size, cudaMemcpyDeviceToHost));

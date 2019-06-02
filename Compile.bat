@@ -25,4 +25,4 @@ if not exist %BUILD_DIR%\NUL mkdir %BUILD_DIR%
 :: --cl-version Not needed in CUDA SDK v10.0
 :: nvcc %SRC_DIR%\%1 --use-local-env --cl-version %VISUAL_COMPILER_VERSION% -I"%CUDA_INCLUDE_DIRS%" -arch sm_%COMPUTE_CAPABILITY% -o %BUILD_DIR%\%~n1 -Xcompiler "/openmp" -Wno-deprecated-gpu-targets
 
-nvcc %SRC_DIR%\%1 --use-local-env -I"%CUDA_INCLUDE_DIRS%" -arch sm_%COMPUTE_CAPABILITY% -o %BUILD_DIR%\%~n1 -Xcompiler "/openmp" -Wno-deprecated-gpu-targets --expt-extended-lambda --disable-warnings
+nvcc %SRC_DIR%\%1 --use-local-env -I"%CUDA_INCLUDE_DIRS%" -arch sm_%COMPUTE_CAPABILITY% -o %BUILD_DIR%\%~n1 -Xcompiler "/openmp" -Wno-deprecated-gpu-targets --expt-extended-lambda -rdc=true -lcudadevrt --disable-warnings

@@ -40,7 +40,6 @@ if (WIN32 AND CUSTOM_NVCC_BUILD)
                 COMMAND cmd /C "${CMAKE_SOURCE_DIR}/Compile.bat ${file}.cu"
                 DEPENDS "${CMAKE_SOURCE_DIR}/src/${file}.cu"
                 DEPENDS "${CMAKE_SOURCE_DIR}/src/CudaUtils.h"
-#                DEPENDS "${CMAKE_SOURCE_DIR}/src/constants/*.h"
         )
         # Because this target depends on the .exe and CMake knows the upper command is responsible
         # for generating this .exe - it will be invoked before running the target. However the command

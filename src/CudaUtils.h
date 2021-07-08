@@ -30,6 +30,8 @@
 #include <iostream>
 #include <thrust/device_vector.h>
 
+#include "util/AssertM.h"
+
 #define checkCuda(ans) { cudaAssert((ans), __FILE__, __LINE__); }
 inline cudaError_t cudaAssert(cudaError_t result, const char* file, int line, bool abort = true) {
     if (result != cudaSuccess){
@@ -134,7 +136,7 @@ public:
     }
 
     void copyTo(void* target, std::size_t size) {
-        assert(("Tried to copy to host more than the buffer length", size <= getSize()));
+        assertM(size <= getSize(), "Tried to copy to host more than the buffer length");
         checkCuda(cudaMemcpy(target, buffer, size, cudaMemcpyDeviceToHost));
     }
 
@@ -144,7 +146,7 @@ public:
     }
 
     void copyFrom(const void* source, std::size_t size) {
-        assert(("Tried to copy to device more than the buffer length", size <= getSize()));
+        assertM(size <= getSize(), "Tried to copy to device more than the buffer length");
         checkCuda(cudaMemcpy(buffer, source, size, cudaMemcpyHostToDevice));
     }
 

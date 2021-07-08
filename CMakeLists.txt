@@ -17,6 +17,12 @@ set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda")
 set(CUSTOM_NVCC_BUILD false)
 
+cmake_policy(SET CMP0104 NEW)
+# The following 'if' block won't be needed when https://gitlab.kitware.com/cmake/cmake/-/issues/22375 gets resolved
+if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 35)
+endif()
+
 file(GLOB files "${CMAKE_SOURCE_DIR}/src/*.cu")
 if (WIN32 AND CUSTOM_NVCC_BUILD)
     foreach (file ${files})

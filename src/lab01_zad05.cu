@@ -75,15 +75,15 @@ int main() {
     printf("Kernel will be invoked with: Block(%d,%d), Grid(%d,%d)\n", dimBlock.x, dimBlock.y, dimGrid.x, dimGrid.y);
 
     thrust::host_vector<QuadraticSource> src (std::vector<QuadraticSource> {QuadraticSource{1, 2, -3}, QuadraticSource{4, 5, 6}, QuadraticSource{1, 0, 0}});
-    thrust::device_vector<QuadraticSource> devSrc = src;
-    thrust::device_vector<QuadraticResult> devRes(devSrc.size());
+    thrust::host_vector<QuadraticResult> res;
 
-    compute <<<dimGrid, dimBlock>>> (devSrc.data().get(), devRes.data().get(), devSrc.size());
-    thrust::host_vector<QuadraticResult> res = devRes;
+    runWithProfiler([&]() {
+        thrust::device_vector<QuadraticSource> devSrc = src;
+        thrust::device_vector<QuadraticResult> devRes(devSrc.size());
 
-    // Wait for the kernel to complete and check for errors
-    checkCuda(cudaPeekAtLastError());
-    checkCuda(cudaDeviceSynchronize());
+        compute <<<dimGrid, dimBlock>>> (devSrc.data().get(), devRes.data().get(), devSrc.size());
+        res = devRes;
+    });
 
     // Print the results
     for (int col = 0; col < WORK_TOTAL; ++col) {

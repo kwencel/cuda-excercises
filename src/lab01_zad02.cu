@@ -30,14 +30,15 @@ int main() {
     std::array<float, WORK_TOTAL> src {0};
     std::array<float, WORK_TOTAL> res;
 
-    CudaBuffer<float> devSrc(WORK_TOTAL);
-    CudaBuffer<float> devRes(WORK_TOTAL);
-    devSrc.copyFrom(src);
+    runWithProfiler([&]() {
+        CudaBuffer<float> devSrc(WORK_TOTAL);
+        CudaBuffer<float> devRes(WORK_TOTAL);
+        devSrc.copyFrom(src);
 
-    addRowNo <<<dimGrid, dimBlock>>> (devSrc, devRes);
-    devRes.copyTo(res);
+        addRowNo <<<dimGrid, dimBlock>>> (devSrc, devRes);
+        devRes.copyTo(res);
+    });
 
-    checkCuda(cudaDeviceSynchronize());
     for (int i = 0; i < WORK_TOTAL; ++i) {
         std::cout << res[i] << std::endl;
     }

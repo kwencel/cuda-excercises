@@ -2,7 +2,7 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
-#include <stdio.h>
+#include <cstdio>
 #include <iostream>
 
 const int N = 1024;
@@ -12,7 +12,7 @@ dim3 dimBlock(BLOCKSIZE, BLOCKSIZE);
 //    N / bs + ((N % bs) != 0);
 dim3 dimGrid((N / dimBlock.x) + 1, (N / dimBlock.y) + 1);
 
-__global__ void addMatrix(float* a, float* b, float* c, int n) {
+__global__ void addMatrix(const float* a, const float* b, float* c, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
     int index = i + j * n;

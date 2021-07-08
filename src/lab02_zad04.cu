@@ -37,18 +37,18 @@ __global__ void compute(T* devSrc, T* devRes, size_t log) {
 int main() {
     std::array<int, WORK_TOTAL> src {1, 2, 3, 4, 5, 6, 7, 8};
     std::array<int, WORK_TOTAL> res;
-    CudaBuffer<int> devSrc(src);
-    CudaBuffer<int> devRes(WORK_TOTAL);
 
-    dim3 dimBlock(BLOCK_WIDTH, BLOCK_HEIGHT);
-    dim3 dimGrid(ceil(WORK_WIDTH / (float) dimBlock.x), ceil(WORK_HEIGHT / (float) dimBlock.y));
-    printf("Invoking with: Block(%d,%d), Grid(%d,%d)\n", dimBlock.x, dimBlock.y, dimGrid.x, dimGrid.y);
-    compute<int, WORK_TOTAL> <<<dimGrid, dimBlock>>> (devSrc, devRes, log2(WORK_TOTAL));
-    // Wait for the kernel to complete and check for errors
-    checkCuda(cudaPeekAtLastError());
-    checkCuda(cudaDeviceSynchronize());
+    runWithProfiler([&]() {
+        CudaBuffer<int> devSrc {src};
+        CudaBuffer<int> devRes {WORK_TOTAL};
 
-    devRes.copyTo(res);
+        dim3 dimBlock(BLOCK_WIDTH, BLOCK_HEIGHT);
+        dim3 dimGrid(ceil(WORK_WIDTH / (float) dimBlock.x), ceil(WORK_HEIGHT / (float) dimBlock.y));
+        printf("Invoking with: Block(%d,%d), Grid(%d,%d)\n", dimBlock.x, dimBlock.y, dimGrid.x, dimGrid.y);
+        compute<int, WORK_TOTAL> <<<dimGrid, dimBlock>>>(devSrc, devRes, log2(WORK_TOTAL));
+        devRes.copyTo(res);
+    });
+
     // Print the results
     for (int col = 0; col < WORK_TOTAL; ++col) {
         std::cout << res[col] << std::endl;

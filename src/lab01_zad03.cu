@@ -27,14 +27,12 @@ __global__ void inveseArray(float* devRes) {
 int main() {
     printf("Kernel will be invoked with: Block(%d,%d), Grid(%d,%d)\n", dimBlock.x, dimBlock.y, dimGrid.x, dimGrid.y);
     std::array<float, WORK_TOTAL> res;
-    CudaBuffer<float> devRes(WORK_TOTAL);
 
-    inveseArray <<<dimGrid, dimBlock>>> (devRes);
-    devRes.copyTo(res);
-
-    // Wait for the kernel to complete and check for errors
-    checkCuda(cudaPeekAtLastError());
-    checkCuda(cudaDeviceSynchronize());
+    runWithProfiler([&]() {
+        CudaBuffer<float> devRes(WORK_TOTAL);
+        inveseArray <<<dimGrid, dimBlock>>> (devRes);
+        devRes.copyTo(res);
+    });
 
     // Print the results
     for (int col = 0; col < WORK_WIDTH; ++col) {

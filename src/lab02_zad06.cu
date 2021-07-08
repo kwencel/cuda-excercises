@@ -61,18 +61,18 @@ __global__ void zad6inclusiveScan(T* devSrc, T* devRes) {
 int main() {
     std::array<int, WORK_TOTAL> src {1, 2, 3, 4, 2, 3, 4, 5, 3, 4, 5, 6, 4, 5, 6, 7};
     std::array<int, WORK_TOTAL> res;
-    CudaBuffer<int> devSrc(src);
-    CudaBuffer<int> devRes(WORK_TOTAL);
 
-    dim3 dimBlock(BLOCK_WIDTH, BLOCK_HEIGHT);
-    dim3 dimGrid(ceil(WORK_WIDTH / (float) dimBlock.x), ceil(WORK_HEIGHT / (float) dimBlock.y));
-    printf("Invoking with: Block(%d,%d), Grid(%d,%d)\n", dimBlock.x, dimBlock.y, dimGrid.x, dimGrid.y);
-    zad6inclusiveScan<int, WORK_TOTAL> <<<dimGrid, dimBlock>>> (devSrc, devRes);
-    // Wait for the kernel to complete and check for errors
-    checkCuda(cudaPeekAtLastError());
-    checkCuda(cudaDeviceSynchronize());
+    runWithProfiler([&]() {
+        CudaBuffer<int> devSrc {src};
+        CudaBuffer<int> devRes {WORK_TOTAL};
 
-    devRes.copyTo(res);
+        dim3 dimBlock(BLOCK_WIDTH, BLOCK_HEIGHT);
+        dim3 dimGrid(ceil(WORK_WIDTH / (float) dimBlock.x), ceil(WORK_HEIGHT / (float) dimBlock.y));
+        printf("Invoking with: Block(%d,%d), Grid(%d,%d)\n", dimBlock.x, dimBlock.y, dimGrid.x, dimGrid.y);
+        zad6inclusiveScan<int, WORK_TOTAL> <<<dimGrid, dimBlock>>> (devSrc, devRes);
+        devRes.copyTo(res);
+    });
+
     // Print the results
     for (int col = 0; col < WORK_TOTAL; ++col) {
         std::cout << res[col] << std::endl;

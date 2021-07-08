@@ -33,17 +33,15 @@ int main() {
     printf("Kernel will be invoked with: Block(%d,%d), Grid(%d,%d)\n", dimBlock.x, dimBlock.y, dimGrid.x, dimGrid.y);
 
     std::array<float, WORK_TOTAL> src {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
-    CudaBuffer<float> devSrc(src);
-
     std::array<float, WORK_TOTAL> res;
-    CudaBuffer<float> devRes(WORK_TOTAL);
 
-    compute<float> <<<dimGrid, dimBlock>>> (devSrc, devRes, WORK_TOTAL, 5);
-    devRes.copyTo(res);
+    runWithProfiler([&] {
+        CudaBuffer<float> devSrc {src};
+        CudaBuffer<float> devRes {WORK_TOTAL};
 
-    // Wait for the kernel to complete and check for errors
-    checkCuda(cudaPeekAtLastError());
-    checkCuda(cudaDeviceSynchronize());
+        compute<float> <<<dimGrid, dimBlock>>> (devSrc, devRes, WORK_TOTAL, 5);
+        devRes.copyTo(res);
+    });
 
     // Print the results
     for (int col = 0; col < WORK_TOTAL; ++col) {

@@ -43,12 +43,12 @@ int main() {
     std::array<int, RESULTS_TOTAL> res;
 
     runWithProfiler([&]() {
-        CudaBuffer<int> devSrc(src);
-        CudaBuffer<int> devRes(res.size());
+        CudaBuffer<int> devSrc {src};
+        CudaBuffer<int> devRes {res.size()};
         dim3 dimBlock(BLOCK_WIDTH, BLOCK_HEIGHT);
         dim3 dimGrid(ceil(WORK_WIDTH / (float) dimBlock.x), ceil(WORK_HEIGHT / (float) dimBlock.y));
         printf("Invoking with: Block(%d,%d), Grid(%d,%d)\n", dimBlock.x, dimBlock.y, dimGrid.x, dimGrid.y);
-        compute<int, RESULTS_TOTAL> << < dimGrid, dimBlock >> > (devSrc, devRes, WORK_TOTAL);
+        compute<int, RESULTS_TOTAL> <<<dimGrid, dimBlock>>> (devSrc, devRes, WORK_TOTAL);
         devRes.copyTo(res);
     });
 

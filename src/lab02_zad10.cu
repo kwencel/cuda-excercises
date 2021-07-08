@@ -42,30 +42,15 @@ int main() {
     std::array<int, WORK_TOTAL> src {0, 1, 3, 2, 5, 0, 0, 4, 3, 2, 1, 1, 5, 4};
     std::array<int, RESULTS_TOTAL> res;
 
-    checkCuda(cudaProfilerStart());
-    cudaEvent_t start, stop;
-    checkCuda(cudaEventCreate(&start));
-    checkCuda(cudaEventCreate(&stop));
-    checkCuda(cudaEventRecord(start, 0));
-
-    CudaBuffer<int> devSrc(src);
-    CudaBuffer<int> devRes(res.size());
-    dim3 dimBlock(BLOCK_WIDTH, BLOCK_HEIGHT);
-    dim3 dimGrid(ceil(WORK_WIDTH / (float) dimBlock.x), ceil(WORK_HEIGHT / (float) dimBlock.y));
-    printf("Invoking with: Block(%d,%d), Grid(%d,%d)\n", dimBlock.x, dimBlock.y, dimGrid.x, dimGrid.y);
-    compute<int, RESULTS_TOTAL> <<<dimGrid, dimBlock>>> (devSrc, devRes, WORK_TOTAL);
-    devRes.copyTo(res);
-
-    checkCuda(cudaEventRecord(stop, 0));
-    checkCuda(cudaEventSynchronize(stop));
-    // Print kernel execution time
-    float elapsedTime;
-    checkCuda(cudaEventElapsedTime(&elapsedTime, start, stop));
-    // Wait for the kernel to complete and check for errors
-    checkCuda(cudaPeekAtLastError());
-    checkCuda(cudaDeviceSynchronize());
-    checkCuda(cudaProfilerStop());
-    printf("Kernel execution finished in %.3f ms\n", elapsedTime);
+    runWithProfiler([&]() {
+        CudaBuffer<int> devSrc {src};
+        CudaBuffer<int> devRes {res.size()};
+        dim3 dimBlock(BLOCK_WIDTH, BLOCK_HEIGHT);
+        dim3 dimGrid(ceil(WORK_WIDTH / (float) dimBlock.x), ceil(WORK_HEIGHT / (float) dimBlock.y));
+        printf("Invoking with: Block(%d,%d), Grid(%d,%d)\n", dimBlock.x, dimBlock.y, dimGrid.x, dimGrid.y);
+        compute<int, RESULTS_TOTAL> <<<dimGrid, dimBlock>>> (devSrc, devRes, WORK_TOTAL);
+        devRes.copyTo(res);
+    });
 
     // Print the results
     for (int col = 0; col < res.size(); ++col) {

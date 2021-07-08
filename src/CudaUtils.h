@@ -93,7 +93,7 @@ public:
 
     // Non-containers but types that can be copied by simple memcpy()
     template<typename std::enable_if_t<std::is_trivially_copyable<std::remove_reference_t<T>>::value>* = nullptr>
-    explicit CudaBuffer(T&& copyable) : CudaBuffer(1) {
+    explicit CudaBuffer(T&& copyable) : CudaBuffer(std::size_t{1}) {
         copyFrom(&copyable, getSize());
     }
 
@@ -140,7 +140,7 @@ public:
 
     template <typename Container>
     void copyTo(Container& target) {
-        copyTo(target.data(), target.size() * sizeof(Container::value_type));
+        copyTo(target.data(), target.size() * sizeof(typename Container::value_type));
     }
 
     void copyFrom(const void* source, std::size_t size) {
@@ -150,7 +150,7 @@ public:
 
     template <typename Container>
     void copyFrom(const Container& source) {
-        copyFrom(source.data(), source.size() * sizeof(Container::value_type));
+        copyFrom(source.data(), source.size() * sizeof(typename Container::value_type));
     }
 
 private:

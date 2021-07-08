@@ -1,33 +1,21 @@
-# To compile this project on Windows, you'll need to have:
-#   nVidia GPU
-#   CUDA Toolkit
-#   Microsoft Visual C++ Build Tools 2015
+# To compile this project you'll need to have CUDA Toolkit >= 5.0 installed.
+# To run the compiled executables, you'll need to have an nVidia GPU with Compute Capability >= 3.5
 #
-# You'll also need to adjust the variables here and in Compile.bat because most probably you'll have different paths than mine.
+# Every CUDA Toolkit release has a list of supported GCC/MSVC compilers.
+# Make sure you have a compatible CUDA Toolkit and C++ compiler pair installed.
 #
-# Turn on CUSTOM_NVCC_BUILD when compiling inside CLion because it doesn't support Visual Studio compiler natively
-# and it's the only Windows compiler that works with NVCC. This is a workaround to make VC++ compiler work in CLion.
+# In case of problems with building this project on Windows using older CUDA Toolkits and/or MSVC compilers
+# try turning on the CUSTOM_NVCC_BUILD variable.
+# You'll also need to adjust the variables in Compile.bat because most probably you'll have different paths than mine.
 
-cmake_minimum_required(VERSION 3.6)
-project(ZZKG_CUDA)
+cmake_minimum_required(VERSION 3.8 FATAL_ERROR)
+project(cuda-exercises LANGUAGES CUDA CXX)
 
-set(CMAKE_CXX_STANDARD 14)
-set(CUDA_TOOLKIT_ROOT_DIR "D:/Programy/nVidia/CUDA/v10.0")
-set(CUDA_SAMPLES_ROOT_DIR "D:/Programy/nVidia/CUDA/v10.0/Samples")
+set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/build")
-set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} --expt-extended-lambda -rdc=true -lcudadevrt")
-set(CUSTOM_NVCC_BUILD true)
-
-include_directories("${CUDA_TOOLKIT_ROOT_DIR}/include")
-include_directories("${CUDA_SAMPLES_ROOT_DIR}/common/inc")
-
-find_package(CUDA QUIET REQUIRED)
-
-find_package(OpenMP)
-if (OPENMP_FOUND)
-    set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
-    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-endif()
+set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda")
+set(CUSTOM_NVCC_BUILD false)
 
 file(GLOB files "${CMAKE_SOURCE_DIR}/src/*.cu")
 if (WIN32 AND CUSTOM_NVCC_BUILD)
@@ -56,14 +44,6 @@ else ()
         # Get only the filename without the absolute path
         get_filename_component(file ${file} NAME_WE)
         message("Generating new target: ${file}")
-        cuda_add_executable(
-                ${file}
-                src/${file}.cu
-        )
+        add_executable(${file} src/${file}.cu)
     endforeach ()
 endif ()
-
-# Dummy executable needed for CLion to provide syntax assistance
-file (GLOB SOURCES src/**.cpp src/**.cu src/**.h)
-set_source_files_properties(${SOURCES} PROPERTIES LANGUAGE CXX)
-add_executable(dummy ${SOURCES})

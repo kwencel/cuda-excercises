@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <string>
 #include <thrust/device_vector.h>
+#include <thrust/host_vector.h>
 #include <thrust/copy.h>
 #include <thrust/count.h>
 #include <thrust/sort.h>
